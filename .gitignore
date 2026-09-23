@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model files
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# Datasets
+data/*
+!data/.gitkeep
+
+# Generated outputs
+results/
+outputs/
+
+# Environment variables
+.env
+
+# OS files
+.DS_Store
+Thumbs.db

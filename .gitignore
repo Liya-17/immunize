@@ -30,3 +30,11 @@ outputs/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Extra model / experiment files
+*.safetensors
+*.bin
+weights/
+checkpoints/
+wandb/
+runs/

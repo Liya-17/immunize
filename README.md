@@ -99,9 +99,16 @@ evaluation.
 
 ## Results
 
-| Experiment | Target model | ε | PSNR ↑ | SSIM ↑ | Output L2 ↑ | Notes |
-|---|---|---|---|---|---|---|
-| PGD baseline | – | 8/255 | – | – | – | *to be filled* |
+   | Experiment | Target model | ε | PSNR ↑ | SSIM ↑ | Output MSE ↑ | Success ↑ |
+   |---|---|---|---|---|---|---|
+   | PGD baseline | StarGAN (CelebA 256) | 4/255 | 37.09 | 0.911 | 0.270 | 100% |
+   | PGD baseline | StarGAN (CelebA 256) | 8/255 | 31.36 | 0.757 | 0.447 | 100% |
+   | Random ±ε noise (control) | StarGAN (CelebA 256) | 4/255 | 36.21 | 0.895 | 0.003 | 0% |
+   | Random ±ε noise (control) | StarGAN (CelebA 256) | 8/255 | 30.29 | 0.716 | 0.011 | 0% |
+
+   20 CelebA test faces, 40 PGD steps, 5 StarGAN edits per face. Success = output MSE ≥ 0.05.
+
+   ![Before/after](docs/figures/before_after_eps4.png)
 
 ## References
 

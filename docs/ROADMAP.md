@@ -39,19 +39,28 @@ calendar.
 **Done when:** the perturbed photo is visually identical (PSNR > 35 dB) and the
 model's output on it is visibly corrupted.
 
+**Status: ✅ done (29 Sep 2026)** — StarGAN, 20 faces: ε = 4/255 gives PSNR 37.1 dB and
+100 % disruption; random ±ε noise gives 0 %. See `results/review1_table.csv`.
+
 ## Phase 2 — Robustness (→ Review-2)
 
 **Goal: protection that survives real-world photo processing.** This is where
 the project's novelty comes from.
 
-| # | Task | Owner |
-|---|---|---|
-| 2.1 | Measure how much baseline protection survives JPEG (q = 90/75/50), resize, Gaussian blur | Member 3 |
-| 2.2 | Add Expectation-over-Transformation (EoT): optimise δ through random JPEG / resize / blur | Member 1 |
-| 2.3 | Differentiable JPEG approximation for EoT | Member 1 |
-| 2.4 | Add a face-identity metric (ArcFace cosine distance) for disruption | Member 3 |
-| 2.5 | Compare baseline vs robust version in one results table | Member 3 |
-| 2.6 | Review-2 slides | Team Lead |
+| # | Task | Owner | Status |
+|---|---|---|---|
+| 2.1 | Measure how much baseline protection survives JPEG (q = 90/75/50), resize, Gaussian blur | Member 3 | code ✅ `eval/robustness.py` · run notebook 02 |
+| 2.2 | Add Expectation-over-Transformation (EoT): optimise δ through random JPEG / resize / blur | Member 1 | code ✅ `attack/eot.py` · run notebook 02 |
+| 2.3 | Differentiable JPEG approximation for EoT | Member 1 | ✅ `attack/diff_jpeg.py` (45–47 dB match to real JPEG, `tests/test_diff_jpeg.py`) |
+| 2.4 | Add a face-identity metric (ArcFace cosine distance) for disruption | Member 3 | to do |
+| 2.5 | Compare baseline vs robust version in one results table | Member 3 | code ✅ notebook 02 §4 → `results/review2_robustness_table.csv` |
+| 2.6 | Review-2 slides | Team Lead | to do |
+| 2.7 | **Real-app test:** send clean / PGD / EoT photos through actual WhatsApp + Instagram, download, re-evaluate | All | notebook 02 §7 (needs phones) |
+| 2.8 | Ablation: EoT steps × samples, JPEG-only vs full transform mix | Member 1 | to do |
+
+Why 2.7 matters: the "WhatsApp-like" transforms in `eval/robustness.py` are our
+approximation of the apps. The real test is what makes the headline claim
+("protection survives WhatsApp/Instagram") defensible at the review.
 
 ## Phase 3 — Transferability & second model (→ Review-3)
 

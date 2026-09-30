@@ -8,3 +8,4 @@ One paragraph per paper: problem, method, key result, what we take from it.
 4. Athalye et al., *Synthesizing Robust Adversarial Examples* (EoT), ICML 2018 —
 5. Salman et al., *PhotoGuard*, ICML 2023 —
 6. Chen et al., *SimSwap*, ACM MM 2020 (target model) —
+7. Shin & Song, *JPEG-resistant Adversarial Images*, NeurIPS-W 2017 (differentiable JPEG, used in `attack/diff_jpeg.py`) —

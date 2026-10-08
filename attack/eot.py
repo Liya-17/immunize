@@ -1,148 +1,97 @@
-"""Phase 2 · PGD + Expectation over Transformation (task 2.2).
+"""Phase 2 · EoT-PGD v3 — protection aimed at what social media actually does.
 
-Plain PGD (attack/pgd.py) finds a perturbation that breaks the model on the
-EXACT protected pixels. Social media changes those pixels (JPEG, resize), and
-the protection can wash out. EoT (Athalye et al., ICML 2018) fixes this by
-optimising the perturbation *through* random versions of those changes:
+What went wrong before
+----------------------
+v1 (attack/eot.py) averaged the loss over random sharing transforms, but the
+easy transforms (no change, mild JPEG) give a loss and a gradient that are
+100-1000x larger than the hard ones (resize -> JPEG, forwarding). Summing
+gradients therefore optimised almost only for the easy cases, so the result
+survived JPEG q=90/75 but died after any resize (WhatsApp-like 0 %).
 
-    maximise  E_t [ || G(t(x + δ)) - G(t(x)) ||² ]   subject to  ||δ||∞ ≤ ε
+v2's low-resolution perturbation survived resizing, but StarGAN reacts mainly
+to fine detail, so a smooth perturbation of the same size barely disrupted it,
+even without sharing.
 
-where t is sampled each step from a distribution of sharing transforms
-(differentiable JPEG, resize, blur, and chains of them). The perturbation that
-comes out is one that still breaks G *after* the photo has been compressed.
-
-v2 options (all off by default, so old notebooks give the same results):
-
-  paired_target=True  Compare against G(t(x_clean)) with the SAME t, which is
-                      exactly how eval/robustness.py scores success. v1
-                      compared against G(x_clean), so part of the "disruption"
-                      it optimised was just compression's own effect, which
-                      the evaluation then subtracts away.
-  lowres=128 (or 64)  Optimise δ on a low-resolution grid and upsample it.
-                      JPEG throws away high-frequency detail and resizing
-                      averages it out; a smooth δ lives in the frequencies
-                      both keep. Bilinear upsampling never exceeds the grid's
-                      values, so ||δ||∞ ≤ ε still holds.
-  loss="log"          Maximise log(MSE) per transform instead of MSE. The
-                      gradient of log(m) is ∇m / m, so the transforms where
-                      protection is weakest (small m — heavy JPEG, resize
-                      chains) get the most weight instead of being drowned
-                      out by easy ones.
-  sampler=make_sampler("sharing", rounding="cubic")
-                      A transform mix weighted towards what actually kills
-                      protection (resize→JPEG chains, low quality, double
-                      sharing), with Shin & Song's cubic rounding instead of
-                      the straight-through estimator.
+What v3 does
+------------
+* Full-resolution perturbation (keeps the detail StarGAN is sensitive to).
+* Paired target: each sample t is scored as || G(t(x+δ)) - G(t(x)) ||², the
+  exact quantity the evaluation measures (an attacker who downloads the
+  shared clean photo still gets G(t(x)); only the difference counts).
+* Log loss: maximise Σ_t log ||·||². Its gradient is ∇m / m, so a transform
+  where the protection is currently weak (m small) gets a large weight
+  instead of being drowned out. This is the main fix.
+* A transform mix weighted towards resize -> JPEG chains and double sharing,
+  with 10 % identity so the unshared photo stays protected.
+* Optional momentum (MI-FGSM, Dong et al. CVPR 2018) to smooth the noisy
+  EoT gradient.
+* All EoT samples go through the model in ONE batch (faster on a GPU). The
+  model must accept a batch of B images and return B*K outputs, sample by
+  sample (the notebook's StarGANEdits does this).
 """
 
 from __future__ import annotations
 
-import math
 import random
 from typing import Callable
 
 import torch
-import torch.nn.functional as F
 
 from attack.diff_jpeg import diff_jpeg
 from eval.robustness import gaussian_blur, resize
 
 Transform = Callable[[torch.Tensor], torch.Tensor]
-Sampler = Callable[[random.Random], Transform]
 
 
-def make_sampler(mix: str = "default", rounding: str = "ste") -> Sampler:
-    """Build a function rng -> random differentiable sharing transform.
-
-    mix="default" : identity 10 % · JPEG q50–95 35 % · resize 15 % · blur 10 %
-                    · resize→JPEG chain 30 %   (the v1 mix)
-    mix="sharing" : JPEG q45–85 25 % · resize 10 % · blur 5 %
-                    · resize→JPEG chain 45 % · chain applied twice 15 %
-                    (no identity: plain PGD already handles the unshared case)
-    rounding      : "ste" (v1) or "cubic" — passed to diff_jpeg.
-    """
+def sharing_sampler(rng: random.Random, rounding: str = "ste") -> Transform:
+    """identity 10 % · JPEG 20 % · resize 15 % · blur 5 %
+    · resize→JPEG 35 % · (resize→JPEG)×2 15 %."""
     def jp(x, q):
         return diff_jpeg(x, q, rounding=rounding)
 
-    def default(rng: random.Random) -> Transform:
-        r = rng.random()
-        if r < 0.10:
-            return lambda x: x
-        if r < 0.45:
-            q = rng.uniform(50, 95)
-            return lambda x: jp(x, q)
-        if r < 0.60:
-            s = rng.uniform(0.5, 1.0)
-            return lambda x: resize(x, s)
-        if r < 0.70:
-            sig = rng.uniform(0.4, 1.5)
-            return lambda x: gaussian_blur(x, sig)
-        s, q = rng.uniform(0.6, 0.95), rng.uniform(55, 85)
+    r = rng.random()
+    if r < 0.10:
+        return lambda x: x
+    if r < 0.30:
+        q = rng.uniform(50, 90)
+        return lambda x: jp(x, q)
+    if r < 0.45:
+        s = rng.uniform(0.5, 0.9)
+        return lambda x: resize(x, s)
+    if r < 0.50:
+        sig = rng.uniform(0.5, 1.5)
+        return lambda x: gaussian_blur(x, sig)
+    if r < 0.85:
+        s, q = rng.uniform(0.5, 0.95), rng.uniform(50, 85)
         return lambda x: jp(resize(x, s), q)
-
-    def sharing(rng: random.Random) -> Transform:
-        r = rng.random()
-        if r < 0.25:
-            q = rng.uniform(45, 85)
-            return lambda x: jp(x, q)
-        if r < 0.35:
-            s = rng.uniform(0.45, 0.9)
-            return lambda x: resize(x, s)
-        if r < 0.40:
-            sig = rng.uniform(0.5, 1.5)
-            return lambda x: gaussian_blur(x, sig)
-        if r < 0.85:
-            s, q = rng.uniform(0.5, 0.95), rng.uniform(50, 85)
-            return lambda x: jp(resize(x, s), q)
-        s1, q1 = rng.uniform(0.6, 0.95), rng.uniform(55, 85)
-        s2, q2 = rng.uniform(0.6, 0.95), rng.uniform(55, 85)
-        return lambda x: jp(resize(jp(resize(x, s1), q1), s2), q2)
-
-    if mix == "default":
-        return default
-    if mix == "sharing":
-        return sharing
-    raise ValueError(f"unknown mix {mix!r}")
+    s1, q1 = rng.uniform(0.6, 0.95), rng.uniform(55, 85)
+    s2, q2 = rng.uniform(0.6, 0.95), rng.uniform(55, 85)
+    return lambda x: jp(resize(jp(resize(x, s1), q1), s2), q2)
 
 
-default_sampler = make_sampler("default", "ste")
-
-
-def _upsample(d: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
-    if d.shape[-2:] == size:
-        return d
-    return F.interpolate(d, size=size, mode="bilinear", align_corners=False)
-
-
-def eot_pgd_disrupt(
+def eot_pgd_v3(
     model,
     x: torch.Tensor,
     eps: float = 8 / 255,
     steps: int = 60,
-    step_size: float | None = None,
     n_samples: int = 4,
-    sampler: Sampler = default_sampler,
-    random_start: bool = True,
+    step_size: float | None = None,
+    loss: str = "log",
+    paired: bool = True,
+    momentum: float = 0.0,
+    rounding: str = "ste",
     seed: int = 0,
-    *,
-    paired_target: bool = False,
-    lowres: int | None = None,
-    loss: str = "mse",
 ) -> torch.Tensor:
-    """Return a protected copy of `x` that stays disruptive after compression.
+    """Return a protected copy of x (1 x 3 x H x W, values in [0, 1]).
 
-    Same interface as `attack.pgd.pgd_disrupt`, plus:
-      n_samples     : transforms averaged per step (the "expectation"); cost is
-                      roughly steps × n_samples forward/backward passes
-                      (+1 no-grad forward each when paired_target=True).
-      sampler       : function(rng) -> differentiable transform (make_sampler).
-      paired_target : score against G(t(x)) instead of G(x)   — see module doc.
-      lowres        : side length of the low-resolution δ grid, or None.
-      loss          : "mse" or "log".
-    The defaults reproduce v1 exactly.
+    loss     : "log" (v3) or "mse" (v1 behaviour)
+    paired   : compare against G(t(x)) (v3) or G(x) (v1)
+    momentum : 0 = plain sign-PGD, 0.9 = MI-FGSM
     """
-    if loss not in ("mse", "log"):
+    if loss not in ("log", "mse"):
         raise ValueError(f"unknown loss {loss!r}")
+    if x.shape[0] != 1:
+        raise ValueError("protect one image at a time (x must be 1 x 3 x H x W)")
     if step_size is None:
         step_size = eps / 10
     rng = random.Random(seed)
@@ -150,45 +99,33 @@ def eot_pgd_disrupt(
 
     model.eval()
     x = x.detach()
-    h, w = x.shape[-2:]
     with torch.no_grad():
-        target = model(x).detach()  # the normal deepfake we want to move away from
+        target = model(x).detach()
 
-    if lowres is None:
-        grid = (h, w)
-    else:
-        grid = (lowres, max(1, round(lowres * w / h)))
-    shape = (*x.shape[:2], *grid)
-
-    delta = torch.empty(shape, device=x.device, dtype=x.dtype).uniform_(-eps, eps) \
-        if random_start else torch.zeros(shape, device=x.device, dtype=x.dtype)
-    if lowres is None:
-        delta = (x + delta).clamp(0, 1) - x  # v1 behaviour: keep x+δ inside [0, 1]
-    delta.requires_grad_(True)
-
-    def protected(d):
-        if lowres is None:
-            return x + d  # v1: δ is already kept feasible after every step
-        return (x + _upsample(d, (h, w))).clamp(0, 1)
+    delta = torch.empty_like(x).uniform_(-eps, eps)
+    delta = ((x + delta).clamp(0, 1) - x).requires_grad_(True)
+    velocity = torch.zeros_like(x)
 
     for _ in range(steps):
-        grad = torch.zeros_like(delta)
-        for _ in range(n_samples):
-            t = sampler(rng)
-            out = model(t(protected(delta)))
-            if paired_target:
-                with torch.no_grad():
-                    ref = model(t(x))
-            else:
-                ref = target
-            m = F.mse_loss(out, ref)
-            obj = torch.log(m + 1e-8) if loss == "log" else m
-            g, = torch.autograd.grad(obj, delta)
-            grad += g
+        ts = [sharing_sampler(rng, rounding) for _ in range(n_samples)]
+        xp = x + delta
+        out = model(torch.cat([t(xp) for t in ts]))
         with torch.no_grad():
-            delta += step_size * grad.sign()
+            if paired:
+                ref = model(torch.cat([t(x) for t in ts]))
+            else:
+                ref = target.repeat(n_samples, 1, 1, 1)
+        per_sample = ((out - ref) ** 2).reshape(n_samples, -1).mean(1)
+        obj = torch.log(per_sample + 1e-6).sum() if loss == "log" else per_sample.sum()
+        grad, = torch.autograd.grad(obj, delta)
+        with torch.no_grad():
+            if momentum > 0:
+                velocity = momentum * velocity + grad / (grad.abs().mean() + 1e-12)
+                direction = velocity.sign()
+            else:
+                direction = grad.sign()
+            delta += step_size * direction
             delta.clamp_(-eps, eps)
-            if lowres is None:
-                delta.copy_((x + delta).clamp(0, 1) - x)
+            delta.copy_((x + delta).clamp(0, 1) - x)
 
-    return protected(delta).detach()
+    return (x + delta).detach()
